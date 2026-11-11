@@ -9,62 +9,56 @@ Commands are agent calls. The grammar is `hackertube <verb> [vid|query] [--flags
 
 ## 1. Parser
 
-In `src/hackertube/cli.py`, add a subparser with `parents=[common]` so `--json`, `--full`, and `--fields` work before or after the verb. Set `allow_abbrev` by using `Parser`. One-line `help=`.
+In `src/cli.rs`, add a clap variant. `--json`, `--full`, and `--fields` are global. One-line doc comment, which clap uses as `--help`.
 
-```python
-example = sub.add_parser("example", parents=[common], help="One line an agent can scan")
-example.add_argument("vid")
-example.add_argument("--limit", type=int)
-```
-
-Unknown flags must hit `Parser.error` and become exit 2. Do not set `allow_abbrev=True`. Do not read stdin unless the command's contract says so (none of the current commands do).
+Unknown flags become exit 2 with a structured stdout error. Do not read stdin.
 
 ## 2. Handler
 
-Add the verb to the dict in `commands.run`. The handler signature is `(args, flags, home) -> tuple[dict, int]`.
+Add a function in `src/commands.rs` and call it from `cli::dispatch`. Signature: `fn example(flags: &Flags, ...) -> Result<(Doc, i32), AppError>`. The function emits the document itself.
 
-Build a flat dict:
+Build a `Doc`:
 
-- scalars the agent needs (`vid`, `count`, `mode`)
-- one `Table` per list, default 3 or 4 fields, via `_table`
-- `help` is added by `_finish`; pass concrete next commands that include a real id from the result when you have one
+- scalars the agent needs (`vid`, `count`, `mode`) via `doc.add`
+- one table per list, default 3 or 4 fields, via `output::project_fields` then `doc.table`
+- `doc.help` with concrete next commands that include a real id from the result when you have one
 
-```python
-document = {
-    "count": f"{len(shown)} of {len(matched)}",
-    "videos": _table(("vid", "title", "score", "reason"), rows, flags, VIDEO_FIELDS),
+```rust
+let mut doc = Doc::new();
+doc.add("count", format!("{} of {total}", records.len()));
+doc.table("videos", &["vid", "title", "score", "reason"], rows);
+if records.is_empty() {
+    doc.add("empty", "no videos match the filters");
 }
-if not shown:
-    document["empty"] = "no videos match the filters"
-return _finish(document, flags, [f"hackertube show {vid}"]), 0
+doc.help(&["hackertube show <vid>"]);
+output::emit(&doc, flags.json, flags.full);
+Ok((doc, 0))
 ```
 
-Operational misses raise `AppError("not_found", detail, vid=vid)` (exit 1). Bad arguments raise `UsageError` (exit 2). Do not `print()` inside the handler. Do not traceback.
+Operational misses return `AppError::new("not_found", detail).with("vid", vid)` (exit 1). Bad arguments return `UsageError` (exit 2). Do not `print!` the document inside the handler; `output::emit` is the stdout path. Do not panic for a missing video.
 
 If the command changes a file, write the same bytes on a repeat and return `changed: false` when the stored value already matches. Exit 0.
 
 ## 3. Fields and truncation
 
-Default columns are the contract. Add any extra selectable names to the `allowed` set passed to `_table`. `--fields` replaces the default; an unknown name is exit 2.
+Default columns are the contract. Add any extra selectable names to the allow-list passed to `output::project_fields`. `--fields` replaces the default; an unknown name is exit 2.
 
 Do not put a fifth column on the default row. Put the extra fact in a scalar (`count`, `mode`, `excluded`) instead.
 
-`_finish` truncates long strings unless `flags.full`. Do not pre-slice URLs.
-
-Insight-style tables that do not share columns with video rows should pass `honor_fields=False` so a video `--fields` list does not crash them.
+`output::emit` truncates long strings unless `flags.full`. Do not pre-slice URLs.
 
 ## 4. Tests
 
-In `tests/test_cli.py` (or a new file that uses `run_cli`):
+In `tests/cli.rs`, using `assert_cmd` and a temp `HACKERTUBE_HOME`:
 
 - success exit 0, stdout contains the table header `name[N]{col,col,col}:` and `help[`
-- empty input or empty catalog exit 0 with `empty:` and a `[0]` header, not a stack trace
+- empty input or empty catalog exit 0 with `empty:` and a `[0]` header, not a panic
 - repeat of a mutation: first `changed: true`, second `changed: false`
-- `--json` parses with `json.loads` and has a `help` array
+- `--json` parses and has a `help` array
 - unknown flag exit 2, stdout contains `error:` and `exit: 2`
-- a missing video exit 1 with `error: not_found` (or your code) on stdout
+- a missing video exit 1 with `error: not_found` on stdout
 
-Use `write_dataset` / `write_aietalks`. Do not download.
+Set `HACKERTUBE_EMBED=off` and `HACKERTUBE_CAPTIONS=off`. Do not download.
 
 ## 5. Docs
 

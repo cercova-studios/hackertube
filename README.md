@@ -6,18 +6,22 @@ insights out of them. The users are coding agents. There is no web UI.
 Focus areas: `agentic-engineering`, `ai-engineering`, `ai-research`.
 
 ```bash
-uv sync --extra dev --extra embed
-uv run hackertube ingest --path /path/to/hackertube-data
-uv run hackertube
-uv run hackertube recommend --area agentic-engineering
-uv run hackertube insights <vid>
+cargo build --release
+./target/release/hackertube ingest --path /path/to/hackertube-data
+./target/release/hackertube
+./target/release/hackertube recommend --area agentic-engineering
+./target/release/hackertube insights <vid>
 ```
 
 `ingest` with no `--path` downloads the dataset from
 https://hackertube.org/download/hackertube-data.zip into `HACKERTUBE_HOME`
 (default `~/.hackertube`). The zip is not part of this repository.
-`--source aietalks` reads https://ai.engineer/api/data/transcripts?format=json,
-joins YouTube ids from the talks index, and caches each talk's markdown.
+`ingest` also loads the full AI Engineer transcript catalog
+(https://ai.engineer/api/data/transcripts?format=json), joins YouTube ids from
+the talks index, caches each talk's markdown (`url` + `.md`), and embeds
+transcript chunks with bge-small-en-v1.5. `--limit N` caps that catalog; `0`
+means all. The ONNX model downloads lazily into `HACKERTUBE_HOME/models`. If
+it cannot load, search falls back to keywords and says so.
 
 Output is [TOON](https://toonformat.dev/) by default. `--json` switches to JSON.
 Read [AGENTS.md](AGENTS.md) before changing the CLI. Decisions live in
@@ -43,7 +47,7 @@ committed here.
 | `hackertube` | Home view: bin path, counts, one pick per focus area |
 | `ingest` | Load a source. Idempotent |
 | `recommend --area <id>` | Ranked unseen videos with a one-line reason copied from stored text |
-| `search <query>` | Keyword search, plus cosine similarity when fastembed is installed |
+| `search <query>` | Keyword search blended with cosine similarity. `semantic: off` when the model cannot run |
 | `search <query> --in transcripts` | Timestamped transcript hits |
 | `similar <vid>` | Embedding neighbors, else co-recommended videos |
 | `show <vid>` | One card |
@@ -53,5 +57,5 @@ committed here.
 | `setup` | Optional session hook |
 
 Likes stay recommendable. Seen, disliked, and unexpired snoozes do not.
-`HACKERTUBE_LLM_API_KEY` plus `--llm` is the only path that calls a model.
-`YOUTUBE_API_KEY` plus `enrich` is the only path that calls the YouTube Data API.
+`HACKERTUBE_LLM_API_KEY` plus `--llm` is the only path that calls a chat model.
+Caption fallback reads the public watch page; there is no YouTube Data API command.

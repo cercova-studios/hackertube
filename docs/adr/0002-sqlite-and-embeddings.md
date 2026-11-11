@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [0007](0007-rust-port.md) and [0008](0008-sqlite-vec.md). State still lives in `state.json`. Embeddings now live in sqlite-vec, not a numpy matrix the process multiplies itself.
 
 ## Decision
 

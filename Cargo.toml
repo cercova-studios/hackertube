@@ -1,0 +1,32 @@
+[package]
+name = "hackertube"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Agent-first CLI for ranked AI-engineering videos and grounded insight extraction."
+license = "Apache-2.0"
+authors = ["Rohit Nair"]
+
+[[bin]]
+name = "hackertube"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+half = "2"
+thiserror = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sha2 = "0.10"
+fastembed = "4"
+hex = "0.4"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"

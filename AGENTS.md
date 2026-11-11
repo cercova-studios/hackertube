@@ -10,22 +10,18 @@ viewer and there should not be one.
 ## Repo map
 
 ```
-src/hackertube/          CLI package. Console script: hackertube
-  cli.py                 argparse. Unknown flags exit 2
-  commands.py            one function per command
-  output.py              TOON and JSON rendering, truncation, errors
-  areas.py               focus-area rules (data, not a model)
-  rank.py                affinity, then score, then vid
-  search.py              FTS5, optionally blended with cosine similarity
-  db.py                  SQLite catalog
-  embed.py               embeddings.npy, 384-d, L2-normalized
-  state.py               ~/.hackertube/state.json
-  sources/               pluggable ingest. Register in SOURCES
-  insights.py            deterministic extraction
-  transcript.py          markdown identity + caption fallback
-  youtube_api.py         optional Data API cache
-  session.py             opt-in session hook
-tests/                   pytest. No network (urlopen is blocked)
+src/                     Cargo library + hackertube binary
+  cli.rs                 clap. Unknown flags exit 2
+  commands.rs            one function per command
+  output.rs              TOON and JSON rendering, truncation, errors
+  areas.rs               focus areas: lexical rules plus seed-embedding cosine
+  db.rs                  SQLite catalog
+  vecstore.rs            VectorIndex trait and sqlite-vec impl
+  embed.rs               lazy bge-small-en-v1.5 (fastembed, no query prefix)
+  ingest.rs              hackertube and aietalks sources
+  insights.rs            deterministic extraction
+  state.rs               ~/.hackertube/state.json
+tests/                   cargo test. Offline (HACKERTUBE_EMBED=off)
 docs/adr/                architecture decisions
 .agents/skills/          contributor and usage skills
 .cursor/skills, .claude/skills   symlinks to .agents/skills
@@ -35,11 +31,11 @@ Mutable state lives only under `HACKERTUBE_HOME` (default `~/.hackertube`):
 
 | Path | What |
 |---|---|
-| `catalog.sqlite` | videos, mentions, related ids, transcript segments, FTS |
-| `embeddings.npy` | float16 matrix, row `i` via `embed_rows` |
+| `catalog.sqlite` | videos, mentions, related ids, transcript chunks, FTS, vec0 |
 | `state.json` | seen / like / dislike / snooze. The agent owns this file |
 | `transcripts/<vid>.md` | cached transcript markdown |
-| `cache/` | downloaded zip, AI Engineer pages, YouTube metadata |
+| `models/` | lazy ONNX download for bge-small-en-v1.5 |
+| `cache/` | downloaded zip, AI Engineer pages |
 | `hooks/session.sh` | written by `setup` |
 
 `HACKERTUBE_TODAY=YYYY-MM-DD` freezes the clock for snooze expiry. It is a
@@ -48,39 +44,37 @@ supported replay switch, not a hidden test hook.
 ## Setup
 
 ```bash
-uv sync --extra dev          # pytest, ruff, mypy
-uv sync --extra embed        # fastembed, for query and AI Engineer vectors
-uv sync --extra captions     # youtube-transcript-api
-uv run hackertube --help
+cargo build --release
+./target/release/hackertube --help
 ```
 
-Python 3.11+. Core install needs only numpy. Semantic search and AI Engineer
-embeddings no-op (and say `semantic: off` / `embedded: 0`) until `embed` is
-installed. Caption fallback no-ops with `transcript_unavailable` until
-`captions` is installed. Neither missing extra is allowed to traceback.
+Stable Rust. Semantic search is on by default. The model downloads on first
+use. Set `HACKERTUBE_EMBED=off` to force lexical search. If the model cannot
+load, commands still succeed and print `semantic: off` plus `notice`.
 
 ## How to run
 
 ```bash
-uv run hackertube
-uv run hackertube ingest --path /path/to/unzipped-or-zip
-uv run hackertube ingest --source aietalks --limit 20   # 0 = full index
-uv run hackertube recommend --area agentic-engineering
-uv run hackertube search "coding agents"
-uv run hackertube search "harness" --in transcripts
-uv run hackertube similar <vid>
-uv run hackertube show <vid>
-uv run hackertube transcript <vid>
-uv run hackertube insights <vid>
-uv run hackertube seen <vid>
-uv run hackertube snooze <vid> --days 7
-uv run hackertube forget <vid>
-uv run hackertube setup
+cargo build --release
+./target/release/hackertube
+./target/release/hackertube ingest --path /path/to/unzipped-or-zip
+./target/release/hackertube recommend --area agentic-engineering
+./target/release/hackertube search "context engineering"
+./target/release/hackertube search "harness" --in transcripts
+./target/release/hackertube similar <vid>
+./target/release/hackertube show <vid>
+./target/release/hackertube transcript <vid>
+./target/release/hackertube insights <vid>
+./target/release/hackertube seen <vid>
+./target/release/hackertube snooze <vid> --days 7
+./target/release/hackertube forget <vid>
+./target/release/hackertube setup
 ```
 
 `ingest` without `--path` downloads
-`https://hackertube.org/download/hackertube-data.zip`. Do not commit that zip,
-`embeddings.npy`, or a filled `HACKERTUBE_HOME`.
+`https://hackertube.org/download/hackertube-data.zip` and the full AI Engineer
+transcript catalog. Do not commit that zip, model files, or a filled
+`HACKERTUBE_HOME`. `--limit N` caps AI Engineer talks; `0` or omitted means all.
 
 AI Engineer ingest:
 
@@ -88,33 +82,32 @@ AI Engineer ingest:
 2. Join `https://ai.engineer/api/data/talks?format=json` on `talkSlug` to get `videoId` and the talk URL. The transcript index has no video id.
 3. `GET {url}.md`
 4. If the markdown has `Source:` / `Published:` lines (AIE Talks write-ups), those win and must match the joined video id. Official ai.engineer markdown has a YouTube link instead; that link must match too.
+5. Chunk the transcript (~800 characters) and embed each chunk into `vec_chunks` so `search --in transcripts` and video `similar` can use both sources.
 
-Only `ai.engineer` and `aietalks.com` are fetched. A local snapshot
-(`transcripts.json`, `talks.json`, `markdown/<vid>.md`) is what tests use.
-Pass it with `--source aietalks --path <dir>`.
+Only `ai.engineer`, `aietalks.com`, and `hackertube.org` are fetched. A local
+snapshot (`transcripts.json`, `talks.json`, `markdown/<vid>.md`) is what tests
+use. Pass it with `--source aietalks --path <dir>`.
 
 ## How to test
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv run pytest
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-CI runs those four. Tests refuse `urllib.request.urlopen`. Do not skip that
-guard. Do not mark a test as requiring the network. Build a fixture directory
-and pass `--path`.
+CI runs those three. Tests set `HACKERTUBE_EMBED=off` and
+`HACKERTUBE_CAPTIONS=off`. Do not mark a test as requiring the network. Build
+a fixture directory and pass `--path`.
 
-`HACKERTUBE_HOME` and `HOME` in CLI tests point at `tmp_path` so `setup` cannot
-touch a real `~/.claude`.
+`HACKERTUBE_HOME` and `HOME` in CLI tests point at a temp directory so `setup`
+cannot touch a real `~/.claude`.
 
 ## Conventions
 
-- Imports at the top of the module. Optional packages (`fastembed`,
-  `youtube-transcript-api`) use a top-level `try/except ImportError`.
-- `switch` on a closed union gets a `never` default. This codebase is small;
-  prefer a dict dispatch that a new source or command must be added to.
+- Imports at the top of the module. No inline imports.
+- `match` on a closed enum ends in a `never` check when a new variant should fail the build.
+  A new source or command is a new match arm, not a plugin registry loaded at runtime.
 - Ranking, extraction, and rendering are pure functions of their inputs.
   Do not call an LLM from those functions. `insights --llm` is the only model
   call, and only when `HACKERTUBE_LLM_API_KEY` is set.
@@ -179,21 +172,21 @@ No interactive prompts. No `input()`. No pager.
 
 ## How to add a source
 
-Follow `.agents/skills/add-source/SKILL.md`. Short version: add a module under
-`src/hackertube/sources/`, register it in `SOURCES`, accept `IngestContext`,
-return `SourceResult`, upsert videos, and add an offline fixture test that
-fails if `urlopen` is called.
+Follow `.agents/skills/add-source/SKILL.md`. Short version: add
+`ingest_<id>` and a match arm in `ingest_source`, upsert videos through
+`db::upsert_video` and vectors through `VectorIndex`, and add an offline
+fixture test (`HACKERTUBE_EMBED=off`).
 
 ## How to add a command
 
-Follow `.agents/skills/add-command/SKILL.md`. Register the subparser in
-`cli.py` and the handler in `commands.run`. Print through `output.render`.
+Follow `.agents/skills/add-command/SKILL.md`. Register the clap variant in
+`cli.rs` and the handler in `commands.rs`. Print through `output::render`.
 Add an exit-code test and an output-contract assertion (header fields, `help[`,
 empty state).
 
 ## Definition of done
 
-- `ruff check`, `ruff format --check`, `mypy src`, and `pytest` pass.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass.
 - A new command or source has a fixture test with the network guard still on.
 - List output still defaults to 3–4 fields and ends with `help`.
 - An ADR exists if storage, ranking, or the output contract changed.
@@ -205,11 +198,14 @@ empty state).
 - Do not commit the dataset zip, `videos.jsonl`, `embeddings.npy`, transcripts,
   or YouTube API payloads.
 - Do not print errors only on stderr, prompt, or page.
-- Do not call an LLM, the YouTube Data API, or caption hosts unless the
-  matching env var is set and the user passed the flag (`--llm`, `enrich`,
-  or a transcript miss). Default `insights` stays deterministic.
+- Do not call an LLM or caption hosts unless the matching env var is set and
+  the user passed the flag (`--llm`) or a transcript is missing and
+  `HACKERTUBE_CAPTIONS` is not `off`. Default `insights` stays deterministic.
+  There is no YouTube Data API command.
 - Do not shell out to the 10x-swe `distiller` binary. See
   `docs/adr/0005-insight-extraction.md`.
+- Do not query `vec0` from outside `vecstore.rs`. See `docs/adr/0008-sqlite-vec.md`.
+- Do not bring the Python package back.
 - Do not widen default rows past four fields to "be helpful".
 - Do not rank with a hidden model call or an unstated random sample.
 - Do not put a second copy of a skill under `.cursor/` or `.claude/`. Symlink.

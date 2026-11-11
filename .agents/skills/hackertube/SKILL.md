@@ -10,8 +10,10 @@ description: Use the hackertube CLI to recommend videos and extract grounded ins
 Install once if the command is missing:
 
 ```bash
-uv sync --extra embed --extra captions
+cargo build --release
 ```
+
+The binary is `target/release/hackertube`. The first search or ingest that needs vectors downloads bge-small-en-v1.5 into `~/.hackertube/models`. `semantic: off` plus a `notice` means that download failed and results are keyword-only.
 
 `HACKERTUBE_HOME` defaults to `~/.hackertube`. State (`state.json`) is yours. Do not commit it.
 
@@ -59,7 +61,7 @@ hackertube similar <vid>
 hackertube show <vid>
 ```
 
-`semantic: off` means fastembed is not installed; results are keyword only. Say that if you relied on meaning rather than words. Transcript hits include `at` and the vid. Open that timestamp; do not guess one.
+`semantic: off` plus a `notice` means the embedding model could not run; results are keyword only. Say that if you relied on meaning rather than words. Transcript hits include `at` and the vid. Open that timestamp; do not guess one.
 
 ## Transcript and insights
 
@@ -68,7 +70,7 @@ hackertube transcript <vid>
 hackertube insights <vid>
 ```
 
-AI Engineer markdown is preferred. Otherwise captions are fetched (`uv sync --extra captions`). Exit 1 and `error: transcript_unavailable` means there is no text. Do not invent quotes.
+AI Engineer markdown is preferred. Otherwise the command scrapes YouTube caption tracks. `HACKERTUBE_CAPTIONS=off` skips that network call. Exit 1 and `error: transcript_unavailable` means there is no text. Do not invent quotes.
 
 `insights` returns `chapters`, `claims`, `mentions` (`kind` is `tool`, `paper`, or `repo`), and `quotes`. Every item has `at` and `url`. Quote `text` and cite `url`. If `at` is empty, the name appeared in the preamble and has no timestamp; do not attach one.
 
@@ -92,5 +94,5 @@ videos[2]{vid,title,score,reason}:
 ## Do not
 
 - Do not recommend a vid the command excluded.
-- Do not call the YouTube Data API yourself. `hackertube enrich` does it when `YOUTUBE_API_KEY` is set, and `show` reads the cache.
+- Do not call the YouTube Data API. The CLI does not. Use `show` and `transcript` for what is stored locally.
 - Do not paste the dataset zip into the repo.

@@ -1,12 +1,12 @@
-# ADR 0005: Python insight extraction, not distiller
+# ADR 0005: Insight extraction in-process, not distiller
 
 ## Status
 
-Accepted
+Accepted. The parser now lives in the Rust binary ([0007](0007-rust-port.md)); it still does not shell out.
 
 ## Decision
 
-`insights` and `transcript` are implemented in Python. They do not shell out
+`insights` and `transcript` run inside `hackertube`. They do not shell out
 to the 10x-swe `distiller` binary.
 
 The distiller's YouTube path (`plugins/knowledge/tools/distiller/src/extractors/youtube.rs`,

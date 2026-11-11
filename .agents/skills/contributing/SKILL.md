@@ -17,30 +17,29 @@ HackerTube is an agent-first CLI. Read `AGENTS.md` before editing. Do the work f
 
 ## Checks
 
-From the repo root, with dev extras installed (`uv sync --extra dev`):
+From the repo root, with stable Rust (rustfmt and clippy installed):
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv run pytest
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-CI runs the same four commands (`.github/workflows/ci.yml`). All four must pass.
+CI runs those three commands (`.github/workflows/ci.yml`). All three must pass.
 
 ## Rules that are easy to break
 
-- Tests must not call the network. `tests/conftest.py` replaces `urllib.request.urlopen`. Build a directory fixture and pass `--path`.
-- Do not commit the HackerTube zip, `videos.jsonl`, `embeddings.npy`, transcripts, or YouTube API cache.
+- Tests must not call the network. `tests/cli.rs` sets `HACKERTUBE_EMBED=off` and `HACKERTUBE_CAPTIONS=off`. Build a directory fixture and pass `--path`.
+- Do not commit the HackerTube zip, `videos.jsonl`, `embeddings.npy`, transcripts, the ONNX model, or YouTube API cache.
 - Keep ODC-By attribution in `README.md` and `NOTICE` (HackerTube and https://hackertube.org).
 - Default list rows stay at 3–4 fields. Errors go to stdout. Mutations stay idempotent (`changed: false` on a repeat).
 - New skills go in `.agents/skills/<name>/SKILL.md` and are symlinked from `.cursor/skills/` and `.claude/skills/`. Do not paste a second copy.
-- Imports stay at the top of the file. Optional dependencies are a top-level `try/except ImportError`.
-- No web UI.
+- Vector search goes through `vecstore::VectorIndex`. Do not query `vec0` from a command.
+- No web UI. Do not add a second implementation beside the Cargo binary.
 
 ## PR checklist
 
-- [ ] `ruff`, `mypy`, and `pytest` are green.
+- [ ] `cargo fmt`, `clippy -D warnings`, and `cargo test` are green.
 - [ ] New command or source has a fixture test and an output-contract assertion (`help[`, field list, empty state, exit code).
 - [ ] ADR added if the contract, schema, or focus areas changed.
 - [ ] No dataset dump in the diff (`git status` should not show `*.zip` or `embeddings.npy`).
