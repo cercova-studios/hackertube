@@ -1,0 +1,33 @@
+HackerTube CLI
+Copyright 2026 Rohit Nair
+
+This software is licensed under the Apache License, Version 2.0.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Third-party data
+----------------
+
+The HackerTube catalog ingested by `hackertube ingest` is the public dataset
+from HackerTube (https://hackertube.org), released under the Open Data Commons
+Attribution License (ODC-By) v1.0:
+
+    https://opendatacommons.org/licenses/by/1-0/
+
+Credit HackerTube (https://hackertube.org) and the
+open-index/hacker-news dataset (https://huggingface.co/datasets/open-index/hacker-news).
+Hacker News data is provided by Y Combinator. Comments remain the work of
+their authors. Video titles and channel names belong to their creators.
+
+This project is not affiliated with YouTube, Google, Hacker News, or
+Y Combinator.
+
+AI Engineer talk pages and transcripts are fetched from https://ai.engineer
+(and, when a snapshot uses that format, https://aietalks.com). They remain
+the work of their speakers and publishers. The CLI caches them locally and
+does not redistribute them.
+
+Embeddings shipped inside the HackerTube dataset were produced with
+BAAI/bge-small-en-v1.5. New vectors use the same model via fastembed when
+that extra is installed.
