@@ -26,6 +26,8 @@ fn write_dataset(root: &Path) {
         video("fffffffffff", "Primitive Technology: Stone Axe", "Tool use in the wild.", "A practical demonstration.", "documentary", "evergreen", "stone tools", &["tool use"], &["home-diy-repair"], 6.0, 4),
         video("ggggggggggg", "Backpropagation lecture", "A neural network backpropagation lecture.", "The standard backprop derivation.", "lecture", "evergreen", "neural networks", &["backpropagation"], &["machine-learning"], 7.0, 3),
         video("hhhhhhhhhhh", "OpenAI Plays Hide and Seek", "Two Minute Papers covers OpenAI's multi-agent hide-and-seek experiment, in which agents learned emergent tool use.", "A game demo.", "explainer", "dated", "multi-agent reinforcement learning", &["hide and seek", "openai"], &["machine-learning"], 2.0, 4),
+        video("-0000000000", "A passing mention of tool calling", "A dated demo that says tool calling once.", "Thin.", "demo", "dated", "tools", &["tool calling"], &[], 1.0, 1),
+        video("99999999999", "Harness engineering for coding agents", "Sandboxes, MCP, and context engineering for a coding agent.", "The reference talk on agent harnesses.", "talk", "evergreen", "coding agents", &["agent harness", "mcp", "context engineering"], &[], 14.0, 9),
     ];
     let body = videos
         .iter()
@@ -171,6 +173,31 @@ fn home_recommend_state_and_contract() {
     assert!(!stdout.contains("hhhhhhhhhhh"), "{stdout}");
     assert!(!stdout.contains("fffffffffff"), "{stdout}");
     assert!(stdout.find("abcdefghijk").unwrap() < stdout.find("ccccccccccc").unwrap());
+    assert!(stdout.contains("99999999999"), "{stdout}");
+    assert!(stdout.contains("-0000000000"), "{stdout}");
+    assert!(stdout.find("99999999999").unwrap() < stdout.find("-0000000000").unwrap());
+    let order = stdout
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            for vid in ["-0000000000", "99999999999", "abcdefghijk", "ccccccccccc"] {
+                if trimmed.starts_with(vid) || trimmed.starts_with(&format!("\"{vid}\"")) {
+                    return Some(vid.to_string());
+                }
+            }
+            None
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        spearman(&order) < 0.5,
+        "recommend order tracked video id order: {order:?}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("99999999999") && line.contains('.')),
+        "score should keep a fraction: {stdout}"
+    );
 
     let engineering = String::from_utf8(
         run(&home, &["recommend", "--area", "ai-engineering"])
@@ -323,4 +350,20 @@ fn home_recommend_state_and_contract() {
         .success()
         .stdout(predicates::str::contains("changed: false"));
     let _ = fs::remove_dir_all(&home);
+}
+
+fn spearman(order: &[String]) -> f64 {
+    let n = order.len() as f64;
+    if n < 2.0 {
+        return 1.0;
+    }
+    let mut alpha = order.to_vec();
+    alpha.sort();
+    let mut sum = 0.0;
+    for (rank, vid) in order.iter().enumerate() {
+        let id_rank = alpha.iter().position(|item| item == vid).unwrap();
+        let diff = rank as f64 - id_rank as f64;
+        sum += diff * diff;
+    }
+    1.0 - (6.0 * sum) / (n * (n * n - 1.0))
 }

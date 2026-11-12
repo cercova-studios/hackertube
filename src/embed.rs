@@ -65,6 +65,20 @@ impl EmbedStatus {
         }
     }
 
+    /// Model id recorded by the last successful load, without loading ONNX.
+    /// `HACKERTUBE_EMBED=off` is `off`. Missing or unknown files are `None`.
+    pub fn recorded_model_id(home: &Path) -> Option<String> {
+        if std::env::var("HACKERTUBE_EMBED").ok().as_deref() == Some("off") {
+            return Some("off".to_string());
+        }
+        let text = std::fs::read_to_string(home.join("models").join("selected-model")).ok()?;
+        let id = text.trim();
+        CANDIDATES
+            .iter()
+            .any(|(_, name)| *name == id)
+            .then(|| id.to_string())
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             EmbedStatus::Ready(_) => "fastembed",

@@ -18,7 +18,7 @@ Return `SourceResult { source, videos, embedded, changed, detail }`.
 Rules:
 
 - Upsert with `db::upsert_video`. `source` must be your id. `vid` is an 11-character YouTube id. `hn_recommenders` is `0` for non-HN catalogs so you are not filtered as "never recommended" (that filter applies only to `source == "hackertube"`).
-- Put focus signals in `topic_slugs` and/or `categories`. `areas::classify` reads those, plus cosine similarity to the area seed texts when the embedder is ready. A hard block (hide-and-seek, stone axe, comedy, music) stays at affinity 0 even if the cosine is high.
+- Put focus signals in `topic_slugs` and/or `categories`. `areas::classify` reads those, plus cosine similarity to the area seed texts when the embedder is ready. Agentic engineering also requires the agentic seed to beat the other two seeds by a margin. A hard block (hide-and-seek, stone axe, comedy, music) stays at affinity 0 even if the cosine is high.
 - Store a grounded `why` string copied from the upstream summary. `areas::reason` will not invent one.
 - Assign a deterministic `score` (float). Higher is better. Do not use randomness.
 - Cache bytes under `ctx.home.join("cache").join("<id>")`. On `refresh == false`, reuse the cache. A second ingest with the same bytes returns `changed: false`. Store a sha256 via `db::meta_set`.

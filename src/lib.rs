@@ -10,6 +10,7 @@ pub mod ingest;
 pub mod insights;
 pub mod output;
 pub mod paths;
+pub mod rank;
 pub mod state;
 pub mod vecstore;
 

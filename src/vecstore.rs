@@ -103,6 +103,13 @@ pub trait VectorIndex {
         filter: &KnnFilter,
     ) -> Result<Vec<ChunkHit>, AppError>;
     fn set_blocked(&self, vids: &[String]) -> Result<(), AppError>;
+    fn set_areas(
+        &self,
+        vid: &str,
+        agentic: i32,
+        engineering: i32,
+        research: i32,
+    ) -> Result<(), AppError>;
 }
 
 pub struct SqliteVec<'a> {
@@ -255,6 +262,24 @@ impl VectorIndex for SqliteVec<'_> {
                 params![vid],
             )?;
         }
+        Ok(())
+    }
+
+    fn set_areas(
+        &self,
+        vid: &str,
+        agentic: i32,
+        engineering: i32,
+        research: i32,
+    ) -> Result<(), AppError> {
+        self.conn.execute(
+            "UPDATE vec_videos SET area_agentic = ?1, area_engineering = ?2, area_research = ?3 WHERE vid = ?4",
+            params![agentic, engineering, research, vid],
+        )?;
+        self.conn.execute(
+            "UPDATE vec_chunks SET area_agentic = ?1, area_engineering = ?2, area_research = ?3 WHERE vid = ?4",
+            params![agentic, engineering, research, vid],
+        )?;
         Ok(())
     }
 }

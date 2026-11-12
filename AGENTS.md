@@ -168,6 +168,15 @@ later. `liked` does not drop a video. Shelf life `news` is hidden unless
 `--include-news`. HackerTube rows with zero recommenders are hidden. Comedy
 and music are out of every focus area.
 
+The printed `score` is a blend of similarity to that area's seed, keyword
+strength, the catalog's source score and recommender count, shelf life and
+publish year, and (when the user has likes or dislikes) similarity to that
+profile. It is not the raw Hacker News score. Ties break on those same
+signals and then the title. They do not break on video id. Agentic
+engineering also requires the embedding to sit closer to that seed than to
+AI engineering or AI research, so a coding-agents tag alone does not keep a
+prompt-programming or voice-pipeline talk.
+
 No interactive prompts. No `input()`. No pager.
 
 ## How to add a source

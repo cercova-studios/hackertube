@@ -33,6 +33,9 @@ pub struct Video {
     pub area_agentic: i32,
     pub area_engineering: i32,
     pub area_research: i32,
+    pub cos_agentic: Option<f64>,
+    pub cos_engineering: Option<f64>,
+    pub cos_research: Option<f64>,
     pub updated_at: String,
 }
 
@@ -130,7 +133,21 @@ fn init(conn: &Connection) -> Result<(), AppError> {
          CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(vid, text, start_s UNINDEXED, idx UNINDEXED);",
     )?;
     SqliteVec { conn }.ensure_schema()?;
+    ensure_cosine_columns(conn)?;
     meta_set(conn, "schema_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+fn ensure_cosine_columns(conn: &Connection) -> Result<(), AppError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(videos)")?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for column in ["cos_agentic", "cos_engineering", "cos_research"] {
+        if !names.iter().any(|name| name == column) {
+            conn.execute(&format!("ALTER TABLE videos ADD COLUMN {column} REAL"), [])?;
+        }
+    }
     Ok(())
 }
 
@@ -169,8 +186,9 @@ pub fn upsert_video(conn: &Connection, video: &Video) -> Result<(), AppError> {
             vid, source, url, page_url, title, channel, summary, why, content_type, level,
             shelf_life, primary_topic, tags_json, categories_json, topics_json, quote,
             hn_recommenders, score, published, event, transcript_path, embed_row,
-            area_agentic, area_engineering, area_research, blocked, updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,0,?26)
+            area_agentic, area_engineering, area_research,
+            cos_agentic, cos_engineering, cos_research, blocked, updated_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,0,?29)
          ON CONFLICT(vid) DO UPDATE SET
             source=excluded.source, url=excluded.url, page_url=excluded.page_url, title=excluded.title,
             channel=excluded.channel, summary=excluded.summary, why=excluded.why,
@@ -181,7 +199,8 @@ pub fn upsert_video(conn: &Connection, video: &Video) -> Result<(), AppError> {
             published=excluded.published, event=excluded.event, transcript_path=excluded.transcript_path,
             embed_row=excluded.embed_row, area_agentic=excluded.area_agentic,
             area_engineering=excluded.area_engineering, area_research=excluded.area_research,
-            updated_at=excluded.updated_at",
+            cos_agentic=excluded.cos_agentic, cos_engineering=excluded.cos_engineering,
+            cos_research=excluded.cos_research, updated_at=excluded.updated_at",
         params![
             video.vid, video.source, video.url, video.page_url, video.title, video.channel,
             video.summary, video.why, video.content_type, video.level, video.shelf_life,
@@ -190,7 +209,8 @@ pub fn upsert_video(conn: &Connection, video: &Video) -> Result<(), AppError> {
             serde_json::to_string(&video.topic_slugs).unwrap_or_else(|_| "[]".into()),
             video.quote, video.hn_recommenders, video.score, video.published, video.event,
             video.transcript_path, video.embed_row, video.area_agentic, video.area_engineering,
-            video.area_research, video.updated_at
+            video.area_research, video.cos_agentic, video.cos_engineering, video.cos_research,
+            video.updated_at
         ],
     )?;
     Ok(())
@@ -244,6 +264,9 @@ fn video_from_row(row: &rusqlite::Row<'_>) -> Result<Video, AppError> {
         area_agentic: row.get("area_agentic")?,
         area_engineering: row.get("area_engineering")?,
         area_research: row.get("area_research")?,
+        cos_agentic: row.get("cos_agentic").ok().flatten(),
+        cos_engineering: row.get("cos_engineering").ok().flatten(),
+        cos_research: row.get("cos_research").ok().flatten(),
         updated_at: row.get("updated_at")?,
     })
 }

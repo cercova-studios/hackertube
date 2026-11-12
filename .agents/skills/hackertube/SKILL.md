@@ -40,7 +40,7 @@ hackertube recommend --area ai-engineering
 hackertube recommend --area ai-research
 ```
 
-Rows are `vid, title, score, reason`. The reason is copied from the catalog, not written by you. Pass a row to the user with the vid and the reason. Do not rewrite the reason into a stronger claim.
+Rows are `vid, title, score, reason`. `score` is a continuous blend (area similarity, keyword strength, source quality, shelf life, and likes or dislikes). A higher score is more relevant. Do not re-sort the rows by video id. The reason is copied from the catalog, not written by you. Pass a row to the user with the vid and the reason. Do not rewrite the reason into a stronger claim.
 
 The list already hides seen, disliked, and unexpired snoozes, plus news. Likes remain in the list. After the user watches one:
 

@@ -25,9 +25,9 @@ static ML_PHRASE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)language model|\bllm\b|chatgpt|gpt-4|gpt-3|transformer|neural network|deep learning|diffusion|fine-?tun|retrieval-augmented|\brag\b|backprop").unwrap()
 });
 
-const AGENTIC_SLUGS: &[&str] = &[
+/// Slugs that name the work of building or operating coding agents.
+const AGENTIC_STRONG_SLUGS: &[&str] = &[
     "coding-agents",
-    "agent-engineering",
     "model-context-protocol",
     "harness-engineering",
     "agent-memory",
@@ -35,10 +35,14 @@ const AGENTIC_SLUGS: &[&str] = &[
     "agent-orchestration",
     "multi-agent-systems",
     "computer-use",
-    "workflow-automation",
-    "software-factories",
     "context-engineering",
     "sandboxes-and-execution-isolation",
+];
+/// Conference tags that often ride along on talks about something else.
+const AGENTIC_WEAK_SLUGS: &[&str] = &[
+    "agent-engineering",
+    "workflow-automation",
+    "software-factories",
 ];
 const ENGINEERING_SLUGS: &[&str] = &[
     "rag-and-knowledge",
@@ -70,10 +74,11 @@ const AGENTIC_STRONG: &[&str] = &[
     "harness engineering",
     "model context protocol",
     "context engineering",
-    "agentic",
+    "agentic coding",
     "llm agent",
     "agent skill",
     "tool calling",
+    "agent observability",
 ];
 const ENGINEERING_STRONG: &[&str] = &[
     "large language model",
@@ -148,11 +153,34 @@ pub fn classify(video: &Signals<'_>) -> Affinity {
         research: lexical_research(video, &blob),
     };
     if let Some(cosines) = video.cosines {
-        affinity.agentic = promote(affinity.agentic, cosines[0]);
+        affinity.agentic = apply_agentic_margin(affinity.agentic, cosines);
         affinity.engineering = promote(affinity.engineering, cosines[1]);
         affinity.research = promote(affinity.research, cosines[2]);
     }
     affinity
+}
+
+/// Agentic engineering has to beat the other area seeds, not merely mention agents.
+/// A strong keyword with no vectors is kept. A strong keyword whose embedding is
+/// closer to AI engineering or research (prompt programming, voice pipelines)
+/// is dropped. A weak keyword is promoted only with a clear margin.
+fn apply_agentic_margin(lexical: i32, cosines: [f32; 3]) -> i32 {
+    let mine = cosines[0];
+    let other = cosines[1].max(cosines[2]);
+    let margin = mine - other;
+    if lexical >= 2 {
+        if margin >= 0.02 && mine >= 0.45 {
+            return lexical;
+        }
+        if lexical >= 3 && margin >= 0.0 && mine >= 0.55 {
+            return 2;
+        }
+        return 0;
+    }
+    if lexical == 1 && margin >= 0.03 && mine >= 0.50 {
+        return 2;
+    }
+    lexical
 }
 
 fn promote(lexical: i32, cosine: f32) -> i32 {
@@ -207,8 +235,10 @@ fn phrase(blob: &str, phrases: &[&str]) -> bool {
 
 fn lexical_agentic(video: &Signals<'_>, blob: &str) -> i32 {
     let mut score = 0;
-    if has_slug(video, AGENTIC_SLUGS) || phrase(blob, AGENTIC_STRONG) {
+    if has_slug(video, AGENTIC_STRONG_SLUGS) || phrase(blob, AGENTIC_STRONG) {
         score = 3;
+    } else if has_slug(video, AGENTIC_WEAK_SLUGS) {
+        score = 1;
     }
     let contextual = blob.contains("multi-agent")
         || blob.contains("tool use")
@@ -470,5 +500,48 @@ mod tests {
         );
         ants.cosines = Some([0.6, 0.2, 0.1]);
         assert_eq!(classify(&ants).agentic, 0);
+    }
+
+    #[test]
+    fn prompt_programming_and_voice_pipelines_lose_to_the_engineering_seed() {
+        let dspy_slugs = owned(&["coding-agents", "prompt-optimization"]);
+        let none = owned(&[]);
+        let mut dspy = video(
+            "DSPy: The End of Prompt Engineering",
+            "A workshop on building LLM programs as testable Python instead of hand-tuned prompts.",
+            "prompt engineering",
+            "dspy prompts",
+            &dspy_slugs,
+            &none,
+            "talk",
+        );
+        dspy.cosines = Some([0.50, 0.68, 0.30]);
+        assert_eq!(classify(&dspy).agentic, 0);
+
+        let voice_slugs = owned(&["voice-ai", "multi-agent-systems"]);
+        let mut voice = video(
+            "Building Effective Voice Agents",
+            "How to chain transcription, an LLM, and text to speech into a voice pipeline.",
+            "voice agents",
+            "voice",
+            &voice_slugs,
+            &none,
+            "talk",
+        );
+        voice.cosines = Some([0.48, 0.66, 0.20]);
+        assert_eq!(classify(&voice).agentic, 0);
+
+        let harness_slugs = owned(&["coding-agents", "harness-engineering"]);
+        let mut harness = video(
+            "Harness engineering for coding agents",
+            "Sandboxes, tool calling, and MCP for a coding agent.",
+            "coding agents",
+            "agent harness mcp",
+            &harness_slugs,
+            &none,
+            "talk",
+        );
+        harness.cosines = Some([0.72, 0.55, 0.30]);
+        assert!(classify(&harness).agentic >= 2);
     }
 }

@@ -8,6 +8,7 @@ use crate::ingest::{self, IngestContext};
 use crate::insights::{self};
 use crate::output::{self, Doc, Val};
 use crate::paths::{self, display_path};
+use crate::rank::{self, RankInput, RankParts};
 use crate::state::{self, Mark};
 use crate::vecstore::{KnnFilter, SqliteVec, VectorIndex};
 use regex::Regex;
@@ -60,6 +61,7 @@ pub fn home(flags: &Flags) -> Result<(Doc, i32), AppError> {
     }
     let catalog = Catalog::open(&home)?;
     sync(&catalog, &marks)?;
+    ingest::reclassify_if_stale(&catalog, &home)?;
     let videos = db::video_count(&catalog.conn)?;
     let sources = db::source_counts(&catalog.conn)?;
     doc.add("videos", videos);
@@ -215,6 +217,7 @@ pub fn recommend(
     }
     let catalog = Catalog::open(&home)?;
     sync(&catalog, &marks)?;
+    ingest::reclassify_if_stale(&catalog, &home)?;
     let areas = area.map(|area| vec![area.to_string()]).unwrap_or_else(|| {
         areas::AREA_IDS
             .iter()
@@ -339,27 +342,33 @@ fn recommend_rows(
         catalog.conn.query_row(&count_sql, [], |row| row.get(0))?
     };
     let list_sql = format!(
-        "SELECT vid, title, score, why, summary, topics_json, primary_topic, channel, source, url, level
+        "SELECT vid, title, score, why, summary, topics_json, primary_topic, channel, source, url, level,
+                shelf_life, published, hn_recommenders, {column}, cos_agentic, cos_engineering, cos_research
          FROM videos WHERE {column} >= 2 AND content_type NOT IN ('comedy','music')
-         AND (shelf_life != 'news' OR {news} = 1) AND (source != 'hackertube' OR hn_recommenders > 0) AND blocked = 0 {source_sql}
-         ORDER BY {column} DESC, score DESC, vid ASC LIMIT {limit}"
+         AND (shelf_life != 'news' OR {news} = 1) AND (source != 'hackertube' OR hn_recommenders > 0) AND blocked = 0 {source_sql}"
     );
     let mut stmt = catalog.conn.prepare(&list_sql)?;
     let map = |row: &rusqlite::Row<'_>| {
-        let slugs: String = row.get(5)?;
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, f64>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            slugs,
-            row.get::<_, String>(6)?,
-            row.get::<_, String>(7)?,
-            row.get::<_, String>(8)?,
-            row.get::<_, String>(9)?,
-            row.get::<_, String>(10)?,
-        ))
+        Ok(Candidate {
+            vid: row.get(0)?,
+            title: row.get(1)?,
+            source_score: row.get(2)?,
+            why: row.get(3)?,
+            summary: row.get(4)?,
+            slugs: row.get(5)?,
+            topic: row.get(6)?,
+            channel: row.get(7)?,
+            source: row.get(8)?,
+            url: row.get(9)?,
+            level: row.get(10)?,
+            shelf_life: row.get(11)?,
+            published: row.get(12)?,
+            recommenders: row.get(13)?,
+            affinity: row.get(14)?,
+            cos_agentic: row.get(15)?,
+            cos_engineering: row.get(16)?,
+            cos_research: row.get(17)?,
+        })
     };
     let collected = if let Some(source) = source {
         stmt.query_map(params![source], map)?
@@ -367,22 +376,158 @@ fn recommend_rows(
     } else {
         stmt.query_map([], map)?.collect::<Result<Vec<_>, _>>()?
     };
-    let rows = collected
+    drop(stmt);
+    let like = centroid(&catalog.conn, &marked(marks, "liked"))?;
+    let dislike = centroid(&catalog.conn, &marked(marks, "disliked"))?;
+    let mut ranked = Vec::with_capacity(collected.len());
+    for candidate in collected {
+        let seed = seed_cosine(
+            area,
+            candidate.cos_agentic,
+            candidate.cos_engineering,
+            candidate.cos_research,
+        );
+        let (like_cosine, dislike_cosine) =
+            profile_cosines(&catalog.conn, &candidate.vid, &like, &dislike)?;
+        let score = rank::recommendation_score(&RankInput {
+            affinity: candidate.affinity,
+            seed_cosine: seed,
+            like_cosine,
+            dislike_cosine,
+            source_score: candidate.source_score,
+            recommenders: candidate.recommenders,
+            shelf_life: &candidate.shelf_life,
+            published: &candidate.published,
+        });
+        let parts = RankParts {
+            score,
+            affinity: candidate.affinity,
+            seed_cosine: seed.unwrap_or(0.0),
+            quality: rank::source_quality_of(candidate.source_score, candidate.recommenders),
+            fresh: rank::freshness_of(&candidate.shelf_life, &candidate.published),
+            title: candidate.title.clone(),
+        };
+        ranked.push((candidate, parts));
+    }
+    ranked.sort_by(|left, right| rank::compare_rank(&left.1, &right.1));
+    let rows = ranked
         .into_iter()
-        .map(
-            |(vid, title, score, why, summary, slugs, topic, channel, source, url, level)| {
-                let topic_slugs = serde_json::from_str::<Vec<String>>(&slugs).unwrap_or_default();
-                let reason = areas::reason(&why, &summary, &topic_slugs, &topic, area);
-                (
-                    vid, title, score, reason, channel, source, url, level, topic,
-                )
-            },
-        )
+        .take(limit as usize)
+        .map(|(candidate, parts)| {
+            let topic_slugs =
+                serde_json::from_str::<Vec<String>>(&candidate.slugs).unwrap_or_default();
+            let reason = areas::reason(
+                &candidate.why,
+                &candidate.summary,
+                &topic_slugs,
+                &candidate.topic,
+                area,
+            );
+            (
+                candidate.vid,
+                candidate.title,
+                parts.score,
+                reason,
+                candidate.channel,
+                candidate.source,
+                candidate.url,
+                candidate.level,
+                candidate.topic,
+            )
+        })
         .collect();
     let hidden_sql = format!("SELECT COUNT(*) FROM videos WHERE {column} >= 2 AND shelf_life = 'news' AND (source != 'hackertube' OR hn_recommenders > 0)");
     let hidden_news: i64 = catalog.conn.query_row(&hidden_sql, [], |row| row.get(0))?;
     let excluded = excluded_counts(&catalog.conn, column, marks)?;
     Ok((rows, matched, excluded, hidden_news))
+}
+
+struct Candidate {
+    vid: String,
+    title: String,
+    source_score: f64,
+    why: String,
+    summary: String,
+    slugs: String,
+    topic: String,
+    channel: String,
+    source: String,
+    url: String,
+    level: String,
+    shelf_life: String,
+    published: String,
+    recommenders: i64,
+    affinity: i32,
+    cos_agentic: Option<f64>,
+    cos_engineering: Option<f64>,
+    cos_research: Option<f64>,
+}
+
+fn seed_cosine(
+    area: &str,
+    agentic: Option<f64>,
+    engineering: Option<f64>,
+    research: Option<f64>,
+) -> Option<f64> {
+    match area {
+        "agentic-engineering" => agentic,
+        "ai-engineering" => engineering,
+        "ai-research" => research,
+        _ => None,
+    }
+}
+
+fn marked(marks: &BTreeMap<String, Mark>, status: &str) -> Vec<String> {
+    marks
+        .iter()
+        .filter(|(_, mark)| mark.status == status)
+        .map(|(vid, _)| vid.clone())
+        .collect()
+}
+
+fn centroid(conn: &rusqlite::Connection, vids: &[String]) -> Result<Option<Vec<f32>>, AppError> {
+    let mut sum = vec![0.0_f32; crate::embed::DIM];
+    let mut count = 0_usize;
+    for vid in vids {
+        let Some(vector) = db::load_embedding(conn, vid)? else {
+            continue;
+        };
+        if vector.len() != sum.len() {
+            continue;
+        }
+        for (slot, value) in sum.iter_mut().zip(vector) {
+            *slot += value;
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Ok(None);
+    }
+    for value in &mut sum {
+        *value /= count as f32;
+    }
+    crate::vecstore::normalize(&mut sum);
+    Ok(Some(sum))
+}
+
+fn profile_cosines(
+    conn: &rusqlite::Connection,
+    vid: &str,
+    like: &Option<Vec<f32>>,
+    dislike: &Option<Vec<f32>>,
+) -> Result<(Option<f64>, Option<f64>), AppError> {
+    if like.is_none() && dislike.is_none() {
+        return Ok((None, None));
+    }
+    let Some(vector) = db::load_embedding(conn, vid)? else {
+        return Ok((None, None));
+    };
+    let cos = |profile: &Option<Vec<f32>>| {
+        profile
+            .as_ref()
+            .map(|profile| f64::from(areas::cosine(&vector, profile)))
+    };
+    Ok((cos(like), cos(dislike)))
 }
 
 fn excluded_counts(
@@ -437,6 +582,7 @@ pub fn search(
     let catalog = Catalog::open(&home)?;
     let marks = state::load(&home)?;
     sync(&catalog, &marks)?;
+    ingest::reclassify_if_stale(&catalog, &home)?;
     let embedder = EmbedStatus::load(&home);
     if where_in == "transcripts" {
         return search_transcripts(flags, &catalog, &embedder, query, area, source, limit);
@@ -1118,6 +1264,7 @@ pub fn areas_cmd(flags: &Flags) -> Result<(Doc, i32), AppError> {
         let catalog = Catalog::open(&home)?;
         let marks = state::load(&home)?;
         sync(&catalog, &marks)?;
+        ingest::reclassify_if_stale(&catalog, &home)?;
         for area in areas::AREA_IDS {
             let (_, matched, _, _) = recommend_rows(&catalog, area, 1, false, None, &marks)?;
             records.push(vec![

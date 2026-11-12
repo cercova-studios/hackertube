@@ -255,6 +255,9 @@ fn video_from_json(row: &Value) -> Result<Video, AppError> {
         area_agentic: 0,
         area_engineering: 0,
         area_research: 0,
+        cos_agentic: None,
+        cos_engineering: None,
+        cos_research: None,
         updated_at: String::new(),
     })
 }
@@ -275,6 +278,116 @@ fn apply_areas(video: &mut Video, cosines: Option<[f32; 3]>) {
     video.area_agentic = affinity.agentic;
     video.area_engineering = affinity.engineering;
     video.area_research = affinity.research;
+    if let Some(cosines) = cosines {
+        video.cos_agentic = Some(f64::from(cosines[0]));
+        video.cos_engineering = Some(f64::from(cosines[1]));
+        video.cos_research = Some(f64::from(cosines[2]));
+    }
+}
+
+pub const AREAS_REV: &str = "4";
+
+/// Recompute focus areas when the classifier or embedding model changed.
+/// Seed vectors come from the active embedder. With the model off, only
+/// keyword rules run.
+pub fn reclassify_if_stale(catalog: &Catalog, home: &Path) -> Result<(), AppError> {
+    if let Some(id) = crate::embed::EmbedStatus::recorded_model_id(home) {
+        let want = format!("{AREAS_REV}:{id}");
+        if db::meta_get(&catalog.conn, "areas_version")?.as_deref() == Some(want.as_str()) {
+            return Ok(());
+        }
+    }
+    let embedder = EmbedStatus::load(home);
+    let want = format!("{AREAS_REV}:{}", embedder.model_id());
+    if db::meta_get(&catalog.conn, "areas_version")?.as_deref() == Some(want.as_str()) {
+        return Ok(());
+    }
+    reclassify(catalog, &embedder)?;
+    db::meta_set(&catalog.conn, "areas_version", &want)?;
+    Ok(())
+}
+
+fn reclassify(catalog: &Catalog, embedder: &EmbedStatus) -> Result<(), AppError> {
+    let seeds = seed_vectors(embedder);
+    let index = SqliteVec {
+        conn: &catalog.conn,
+    };
+    let mut stmt = catalog.conn.prepare(
+        "SELECT vid, title, summary, why, primary_topic, tags_json, categories_json, topics_json, content_type
+         FROM videos",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    catalog.conn.execute_batch("BEGIN")?;
+    for (vid, title, summary, why, topic, tags_json, categories_json, topics_json, content_type) in
+        rows
+    {
+        let tags = json_string_list(&tags_json);
+        let categories = json_string_list(&categories_json);
+        let topic_slugs = json_string_list(&topics_json);
+        let vector = db::load_embedding(&catalog.conn, &vid)?;
+        let cosines = vector
+            .as_ref()
+            .and_then(|vector| cosine_to_seeds(vector, seeds.as_ref()));
+        let affinity = areas::classify(&Signals {
+            title: &title,
+            summary: &summary,
+            why: &why,
+            topic: &topic,
+            tags: &tags.join(" "),
+            topic_slugs: &topic_slugs,
+            categories: &categories,
+            content_type: &content_type,
+            cosines,
+        });
+        let (cos_agentic, cos_engineering, cos_research) = match cosines {
+            Some(values) => (
+                Some(f64::from(values[0])),
+                Some(f64::from(values[1])),
+                Some(f64::from(values[2])),
+            ),
+            None => (None, None, None),
+        };
+        catalog.conn.execute(
+            "UPDATE videos SET area_agentic = ?1, area_engineering = ?2, area_research = ?3,
+             cos_agentic = ?4, cos_engineering = ?5, cos_research = ?6 WHERE vid = ?7",
+            rusqlite::params![
+                affinity.agentic,
+                affinity.engineering,
+                affinity.research,
+                cos_agentic,
+                cos_engineering,
+                cos_research,
+                vid
+            ],
+        )?;
+        index.set_areas(
+            &vid,
+            affinity.agentic,
+            affinity.engineering,
+            affinity.research,
+        )?;
+    }
+    catalog.conn.execute_batch("COMMIT")?;
+    Ok(())
+}
+
+fn json_string_list(text: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(text).unwrap_or_default()
 }
 
 fn seed_vectors(embedder: &EmbedStatus) -> Option<[Vec<f32>; 3]> {
@@ -502,6 +615,9 @@ fn materialize(
         area_agentic: 0,
         area_engineering: 0,
         area_research: 0,
+        cos_agentic: None,
+        cos_engineering: None,
+        cos_research: None,
         updated_at: now_iso(),
     };
     let embed_text = format!(

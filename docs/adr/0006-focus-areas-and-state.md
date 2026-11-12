@@ -2,12 +2,12 @@
 
 ## Status
 
-Accepted
+Accepted. Ranking by `(-affinity, -score, vid)` is replaced by [0010](0010-recommendation-score.md). Area rules now live in `areas.rs`.
 
 ## Decision
 
-Focus areas are phrase, category, and topic-slug rules in `areas.py`.
-Affinity is an integer. Rank is `(-affinity, -score, vid)`.
+Focus areas are phrase, category, and topic-slug rules.
+Affinity is an integer. The original rank was `(-affinity, -score, vid)`.
 
 `state.json` stores seen, like, dislike, and snooze. Recommend hides seen,
 disliked, and unexpired snoozes. A like is recorded and does not hide the
