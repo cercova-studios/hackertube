@@ -17,4 +17,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo fetch --locked --manifest-path tests/upstream/Cargo.toml
+      - run: cargo fmt --check --manifest-path tests/upstream/Cargo.toml
+      - run: cargo clippy --offline --locked --manifest-path tests/upstream/Cargo.toml --all-targets --target-dir target/upstream-compat -- -D warnings
       - run: cargo test

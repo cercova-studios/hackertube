@@ -43,11 +43,11 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn open(home: &Path) -> Result<Self, AppError> {
-        vecstore::install()?;
         std::fs::create_dir_all(home)?;
         let path = home.join("catalog.sqlite");
         if path.exists() {
             let conn = Connection::open(&path)?;
+            vecstore::install(&conn)?;
             let version = meta_get(&conn, "schema_version")?;
             drop(conn);
             if version.as_deref() != Some(SCHEMA_VERSION) && version.is_some() {
@@ -56,6 +56,7 @@ impl Catalog {
             }
         }
         let conn = Connection::open(&path)?;
+        vecstore::install(&conn)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         init(&conn)?;
         Ok(Self { conn, path })
@@ -272,11 +273,13 @@ pub fn video_count(conn: &Connection) -> Result<i64, AppError> {
 }
 
 pub fn sync_blocked(conn: &Connection, vids: &[String]) -> Result<(), AppError> {
-    conn.execute("UPDATE videos SET blocked = 0", [])?;
+    let desired = serde_json::json!(vids).to_string();
+    conn.execute(
+        "UPDATE videos SET blocked = vid IN (SELECT value FROM json_each(?1))
+         WHERE blocked IS NOT (vid IN (SELECT value FROM json_each(?1)))",
+        [desired],
+    )?;
     SqliteVec { conn }.set_blocked(vids)?;
-    for vid in vids {
-        conn.execute("UPDATE videos SET blocked = 1 WHERE vid = ?1", params![vid])?;
-    }
     Ok(())
 }
 
@@ -484,4 +487,142 @@ pub fn related_to(
 
 pub fn area_column(area: &str) -> Option<&'static str> {
     crate::areas::Affinity::column(area)
+}
+
+#[cfg(test)]
+mod blocked_tests {
+    use super::*;
+    use crate::state::{self, Mark};
+    use crate::vecstore::{ChunkVec, VideoVec};
+    use chrono::NaiveDate;
+    use std::collections::BTreeMap;
+
+    fn fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        vecstore::install(&conn).unwrap();
+        init(&conn).unwrap();
+        let index = SqliteVec { conn: &conn };
+        for id in 1..=3 {
+            let vid = format!("{id:011}");
+            conn.execute(
+                "INSERT INTO videos(vid,source,url,title) VALUES(?1,'hackertube','url','title')",
+                [&vid],
+            )
+            .unwrap();
+            let mut embedding = vec![0.0; 384];
+            embedding[0] = 1.0;
+            index
+                .upsert_video(&VideoVec {
+                    rowid: id,
+                    vid: vid.clone(),
+                    source: "hackertube".into(),
+                    shelf_life: "evergreen".into(),
+                    area_agentic: 3,
+                    area_engineering: 0,
+                    area_research: 0,
+                    blocked: 0,
+                    embedding: embedding.clone(),
+                })
+                .unwrap();
+            for chunk in 0..2 {
+                index
+                    .upsert_chunk(&ChunkVec {
+                        rowid: id * 10 + chunk,
+                        vid: vid.clone(),
+                        start_s: chunk * 30,
+                        source: "hackertube".into(),
+                        area_agentic: 3,
+                        area_engineering: 0,
+                        area_research: 0,
+                        blocked: 0,
+                        embedding: embedding.clone(),
+                    })
+                    .unwrap();
+            }
+        }
+        conn
+    }
+
+    fn assert_flags(conn: &Connection, expected: &[String]) {
+        for table in ["videos", "vec_videos", "vec_chunks"] {
+            let mut stmt = conn
+                .prepare(&format!("SELECT vid,blocked FROM {table}"))
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i32>(1)?)))
+                .unwrap();
+            for row in rows {
+                let (vid, blocked) = row.unwrap();
+                assert_eq!(
+                    blocked,
+                    i32::from(expected.contains(&vid)),
+                    "{table}: {vid}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unchanged_marks_write_nothing_and_new_rows_are_repaired() {
+        let conn = fixture();
+        let ids = vec![
+            "00000000001".into(),
+            "00000000001".into(),
+            "unknown'quoted".into(),
+        ];
+        sync_blocked(&conn, &ids).unwrap();
+        assert_flags(&conn, &ids);
+        let before = conn.total_changes();
+        sync_blocked(&conn, &ids).unwrap();
+        assert_eq!(
+            conn.total_changes(),
+            before,
+            "unchanged marks must not rewrite rows"
+        );
+        conn.execute_batch("INSERT INTO vec_chunks(rowid,embedding,vid,start_s,source,area_agentic,area_engineering,area_research,blocked)
+            SELECT 999,embedding,vid,60,source,area_agentic,area_engineering,area_research,0 FROM vec_chunks WHERE rowid=10;").unwrap();
+        conn.execute_batch("UPDATE videos SET blocked=0; UPDATE vec_videos SET blocked=0; UPDATE vec_chunks SET blocked=0;").unwrap();
+        sync_blocked(&conn, &ids).unwrap();
+        assert_flags(&conn, &ids);
+        sync_blocked(&conn, &[]).unwrap();
+        assert_flags(&conn, &[]);
+        let before = conn.total_changes();
+        sync_blocked(&conn, &[]).unwrap();
+        assert_eq!(conn.total_changes(), before);
+    }
+
+    #[test]
+    fn snooze_expiry_forget_and_outer_rollback_keep_flags_consistent() {
+        let conn = fixture();
+        let day = NaiveDate::from_ymd_opt(2026, 11, 15).unwrap();
+        let mut marks = BTreeMap::new();
+        for (vid, status, until) in [
+            ("00000000001", "snoozed", "2026-11-15"),
+            ("00000000002", "liked", ""),
+            ("00000000003", "disliked", ""),
+        ] {
+            marks.insert(
+                vid.into(),
+                Mark {
+                    status: status.into(),
+                    at: String::new(),
+                    until: until.into(),
+                },
+            );
+        }
+        let desired = state::blocked_vids(&marks, day);
+        sync_blocked(&conn, &desired).unwrap();
+        assert_flags(&conn, &desired);
+        marks.remove("00000000003");
+        let next = state::blocked_vids(&marks, day.succ_opt().unwrap());
+        assert!(next.is_empty());
+        conn.execute_batch("BEGIN; SAVEPOINT caller;").unwrap();
+        sync_blocked(&conn, &next).unwrap();
+        assert_flags(&conn, &next);
+        conn.execute_batch("ROLLBACK TO caller; RELEASE caller; COMMIT;")
+            .unwrap();
+        assert_flags(&conn, &desired);
+        sync_blocked(&conn, &next).unwrap();
+        assert_flags(&conn, &next);
+    }
 }

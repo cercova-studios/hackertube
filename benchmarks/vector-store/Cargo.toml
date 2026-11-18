@@ -1,0 +1,17 @@
+[package]
+name = "hackertube-vector-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["fork"]
+fork = ["dep:sqlite-vec-fork"]
+upstream = ["dep:sqlite-vec-upstream"]
+
+[dependencies]
+rusqlite = { version = "=0.32.1", features = ["bundled"] }
+serde_json = "1"
+libc = "0.2"
+sqlite-vec-fork = { package = "sqlite-vec", git = "https://github.com/cercova-studios/sqlite-vec", rev = "98c0e487fb96acef784ad64dceb78fcb11a55edc", optional = true }
+sqlite-vec-upstream = { package = "sqlite-vec", version = "=0.1.9", optional = true }

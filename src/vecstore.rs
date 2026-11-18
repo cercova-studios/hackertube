@@ -1,38 +1,27 @@
 //! sqlite-vec backed vector index.
 //!
-//! [`VectorIndex`] is the swap point. A fork of sqlite-vec (for example
-//! github.com/cercova-studios/sqlite-vec) can replace [`install`] and
-//! [`SqliteVec`] without changing search or ingest, as long as `vec0` KNN
-//! with metadata filters still works.
+//! [`VectorIndex`] owns KNN queries against the pinned sqlite-vec fork.
+//! Register each connection with [`install`] before accessing vector tables.
 
 use crate::error::AppError;
 use rusqlite::{params, Connection};
-use std::sync::Once;
 
 const DIM: usize = 384;
 
-pub fn install() -> Result<(), AppError> {
-    static ONCE: Once = Once::new();
-    let mut error = None;
-    ONCE.call_once(|| {
-        let result = unsafe {
-            rusqlite::auto_extension::register_auto_extension(std::mem::transmute::<
-                *const (),
-                unsafe extern "C" fn(
-                    *mut rusqlite::ffi::sqlite3,
-                    *mut *mut std::os::raw::c_char,
-                    *const rusqlite::ffi::sqlite3_api_routines,
-                ) -> std::os::raw::c_int,
-            >(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            ))
-        };
-        if let Err(err) = result {
-            error = Some(err.to_string());
-        }
-    });
-    if let Some(err) = error {
-        return Err(AppError::new("sqlite_vec", err));
+pub fn install(conn: &Connection) -> Result<(), AppError> {
+    // SAFETY: conn is live, and the static extension uses the same bundled SQLite
+    // runtime as rusqlite. Static registration accepts null error/API pointers.
+    let code = unsafe {
+        sqlite_vec::sqlite3_vec_init(conn.handle().cast(), std::ptr::null_mut(), std::ptr::null())
+    };
+    if code != rusqlite::ffi::SQLITE_OK {
+        return Err(AppError::new(
+            "sqlite_vec",
+            format!(
+                "extension registration failed: {}",
+                rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
+            ),
+        ));
     }
     Ok(())
 }
@@ -243,16 +232,14 @@ impl VectorIndex for SqliteVec<'_> {
     }
 
     fn set_blocked(&self, vids: &[String]) -> Result<(), AppError> {
-        self.conn.execute("UPDATE vec_videos SET blocked = 0", [])?;
-        self.conn.execute("UPDATE vec_chunks SET blocked = 0", [])?;
-        for vid in vids {
+        let desired = serde_json::json!(vids).to_string();
+        for table in ["vec_videos", "vec_chunks"] {
             self.conn.execute(
-                "UPDATE vec_videos SET blocked = 1 WHERE vid = ?1",
-                params![vid],
-            )?;
-            self.conn.execute(
-                "UPDATE vec_chunks SET blocked = 1 WHERE vid = ?1",
-                params![vid],
+                &format!(
+                    "UPDATE {table} SET blocked = vid IN (SELECT value FROM json_each(?1))
+                          WHERE blocked IS NOT (vid IN (SELECT value FROM json_each(?1)))"
+                ),
+                [&desired],
             )?;
         }
         Ok(())
@@ -333,8 +320,8 @@ mod tests {
 
     #[test]
     fn knn_filters_blocked_and_area_in_sql() {
-        install().unwrap();
         let conn = Connection::open_in_memory().unwrap();
+        install(&conn).unwrap();
         let index = SqliteVec { conn: &conn };
         index.ensure_schema().unwrap();
         let on_topic = unit(0);
