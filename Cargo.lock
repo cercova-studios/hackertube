@@ -2569,9 +2569,8 @@ dependencies = [
 
 [[package]]
 name = "sqlite-vec"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0ba424237a9a5db2f6071f193319e2b6a32f7f3961debb2fbbfe67067abce3f"
+version = "0.1.10-alpha.4"
+source = "git+https://github.com/cercova-studios/sqlite-vec?rev=98c0e487fb96acef784ad64dceb78fcb11a55edc#98c0e487fb96acef784ad64dceb78fcb11a55edc"
 dependencies = [
  "cc",
 ]

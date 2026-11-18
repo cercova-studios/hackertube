@@ -10,3 +10,5 @@
 | [0006](0006-focus-areas-and-state.md) | Declarative areas and recommendation filters |
 | [0007](0007-rust-port.md) | Single Rust binary; Python package removed |
 | [0008](0008-sqlite-vec.md) | sqlite-vec KNN behind `VectorIndex`; lazy bge-small embeddings |
+| [0009](0009-pinned-sqlite-vec-fork.md) | Revision-pinned sqlite-vec fork, connection registration and compatibility |
+| [0010](0010-blocked-state-reconciliation.md) | Set-based synchronization writes only changed blocked flags |

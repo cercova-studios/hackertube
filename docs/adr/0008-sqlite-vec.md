@@ -2,16 +2,15 @@
 
 ## Status
 
-Accepted
+Accepted. ADR 0009 supersedes the dependency and registration choice.
 
 ## Decision
 
 Video and transcript-chunk embeddings live in `vec0` tables (384-d float,
 cosine distance) via the `sqlite-vec` crate. `vecstore::VectorIndex` is the
 only API search and ingest call. `SqliteVec` is the current implementation.
-Replacing it with a drop-in fork (github.com/cercova-studios/sqlite-vec, today
-the same C API as upstream) means changing `install` and `SqliteVec`, not the
-queries' callers.
+The pinned fork and connection-local registration are specified in
+[ADR 0009](0009-pinned-sqlite-vec-fork.md). Vector queries retain this boundary.
 
 KNN queries pass area, source, shelf life, and blocked (seen / disliked /
 active snooze) as `vec0` metadata constraints, so the filter happens in SQL

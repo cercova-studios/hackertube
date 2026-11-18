@@ -24,8 +24,14 @@ means all. The ONNX model downloads lazily into `HACKERTUBE_HOME/models`. If
 it cannot load, search falls back to keywords and says so.
 
 Output is [TOON](https://toonformat.dev/) by default. `--json` switches to JSON.
-Read [AGENTS.md](AGENTS.md) before changing the CLI. Decisions live in
-[docs/adr](docs/adr).
+Read [AGENTS.md](AGENTS.md) before changing the CLI. The module and persistence
+map is in [ARCHITECTURE.md](ARCHITECTURE.md). Decisions live in [docs/adr](docs/adr).
+
+Vector search uses a revision-pinned [sqlite-vec fork](https://github.com/cercova-studios/sqlite-vec)
+linked into the binary, with bundled SQLite. Build with Cargo and a C compiler;
+no separately installed SQLite extension is required. See
+[ADR 0009](docs/adr/0009-pinned-sqlite-vec-fork.md) for offline test prerequisites
+and catalog rollback rules.
 
 ## Data attribution
 
